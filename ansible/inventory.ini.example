@@ -1,0 +1,10 @@
+# Ansible Inventory Configuration
+# Replace 'YOUR_EC2_PUBLIC_IP' and SSH key path with your actual deployment values.
+# Alternatively, use the helper script 'scripts/deploy.sh' to generate this automatically.
+
+[webservers]
+web_server_1 ansible_host=YOUR_EC2_PUBLIC_IP ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/my-key.pem
+
+[webservers:vars]
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'

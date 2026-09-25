@@ -1,0 +1,114 @@
+name: Infrastructure Deployment
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to execute"
+        required: true
+        default: "apply"
+        type: choice
+        options:
+          - apply
+          - destroy
+
+jobs:
+  deploy-or-destroy:
+    name: Provision, Configure & Validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Required for AWS OIDC authentication
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Ansible
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible
+
+      - name: Configure AWS Credentials (OIDC or Secret Keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      # ------------------------------------------------------------------------
+      # DESTROY PATH
+      # ------------------------------------------------------------------------
+      - name: Destroy Infrastructure
+        if: github.event.inputs.action == 'destroy'
+        run: |
+          cd terraform
+          terraform init
+          terraform destroy -auto-approve
+
+      # ------------------------------------------------------------------------
+      # APPLY PATH
+      # ------------------------------------------------------------------------
+      - name: Setup SSH Key for Ansible
+        if: github.event.inputs.action != 'destroy' && secrets.SSH_PRIVATE_KEY != ''
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Terraform Apply
+        if: github.event.inputs.action != 'destroy'
+        id: tf-apply
+        run: |
+          cd terraform
+          terraform init
+          terraform apply -auto-approve
+          PUBLIC_IP=$(terraform output -raw public_ip)
+          echo "ec2_public_ip=${PUBLIC_IP}" >> $GITHUB_OUTPUT
+
+      - name: Configure Server with Ansible
+        if: github.event.inputs.action != 'destroy' && secrets.SSH_PRIVATE_KEY != ''
+        run: |
+          PUBLIC_IP="${{ steps.tf-apply.outputs.ec2_public_ip }}"
+          echo "[*] Target Host IP: ${PUBLIC_IP}"
+          
+          # Create dynamic inventory
+          cat <<EOF > ansible/inventory.ini
+          [webservers]
+          web_server_1 ansible_host=${PUBLIC_IP} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+          
+          [webservers:vars]
+          ansible_python_interpreter=/usr/bin/python3
+          ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+          EOF
+
+          cd ansible
+          ansible-playbook -i inventory.ini playbook.yml
+
+      - name: Run Python Health Check & Validation
+        if: github.event.inputs.action != 'destroy'
+        run: |
+          PUBLIC_IP="${{ steps.tf-apply.outputs.ec2_public_ip }}"
+          python scripts/validate.py --host "${PUBLIC_IP}" --port 80 --retries 10 --delay 10
+
+      - name: Pipeline Summary
+        if: github.event.inputs.action != 'destroy'
+        run: |
+          PUBLIC_IP="${{ steps.tf-apply.outputs.ec2_public_ip }}"
+          echo "### Deployment Successful! :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Public IP:** \`${PUBLIC_IP}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Web Application:** http://${PUBLIC_IP}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health Endpoint:** http://${PUBLIC_IP}/healthz" >> $GITHUB_STEP_SUMMARY

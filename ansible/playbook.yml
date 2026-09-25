@@ -1,0 +1,83 @@
+---
+# ==============================================================================
+# Ansible Playbook: Configure Web Server & Deploy Application
+# Target: EC2 Instance provisioned via Terraform
+# ==============================================================================
+
+- name: Provision and Configure Web Server
+  hosts: webservers
+  become: true
+  gather_facts: true
+
+  vars:
+    web_root: /var/www/html
+    app_title: "AWS Infrastructure Automation"
+
+  tasks:
+    - name: Wait for system boot and SSH connectivity
+      ansible.builtin.wait_for_connection:
+        delay: 5
+        timeout: 300
+
+    - name: Gather facts after connection established
+      ansible.builtin.setup:
+
+    - name: Update apt package cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install required system packages
+      ansible.builtin.apt:
+        name:
+          - nginx
+          - curl
+          - ufw
+          - python3-pip
+        state: present
+
+    - name: Ensure Nginx service is running and enabled on boot
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Deploy dynamic HTML landing page from Jinja2 template
+      ansible.builtin.template:
+        src: templates/index.html.j2
+        dest: "{{ web_root }}/index.html"
+        owner: www-data
+        group: www-data
+        mode: '0644'
+      notify: Reload Nginx
+
+    - name: Deploy health check JSON endpoint
+      ansible.builtin.copy:
+        content: |
+          {
+            "status": "UP",
+            "service": "aws-infrastructure-automation",
+            "timestamp": "{{ ansible_date_time.iso8601 }}"
+          }
+        dest: "{{ web_root }}/healthz"
+        owner: www-data
+        group: www-data
+        mode: '0644'
+
+    - name: Verify web server HTTP response locally
+      ansible.builtin.uri:
+        url: http://localhost/healthz
+        method: GET
+        status_code: 200
+        return_content: true
+      register: health_check_result
+
+    - name: Display health check verification result
+      ansible.builtin.debug:
+        msg: "Local Health Check Verified! Response: {{ health_check_result.content }}"
+
+  handlers:
+    - name: Reload Nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
