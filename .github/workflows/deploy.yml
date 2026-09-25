@@ -1,8 +1,6 @@
 name: Infrastructure Deployment
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
     inputs:
       action:
@@ -63,14 +61,14 @@ jobs:
       # APPLY PATH
       # ------------------------------------------------------------------------
       - name: Setup SSH Key for Ansible
-        if: github.event.inputs.action != 'destroy' && secrets.SSH_PRIVATE_KEY != ''
+        if: github.event.inputs.action == 'apply' && secrets.SSH_PRIVATE_KEY != ''
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
 
       - name: Terraform Apply
-        if: github.event.inputs.action != 'destroy'
+        if: github.event.inputs.action == 'apply'
         id: tf-apply
         run: |
           cd terraform
@@ -80,7 +78,7 @@ jobs:
           echo "ec2_public_ip=${PUBLIC_IP}" >> $GITHUB_OUTPUT
 
       - name: Configure Server with Ansible
-        if: github.event.inputs.action != 'destroy' && secrets.SSH_PRIVATE_KEY != ''
+        if: github.event.inputs.action == 'apply' && secrets.SSH_PRIVATE_KEY != ''
         run: |
           PUBLIC_IP="${{ steps.tf-apply.outputs.ec2_public_ip }}"
           echo "[*] Target Host IP: ${PUBLIC_IP}"
@@ -99,13 +97,13 @@ jobs:
           ansible-playbook -i inventory.ini playbook.yml
 
       - name: Run Python Health Check & Validation
-        if: github.event.inputs.action != 'destroy'
+        if: github.event.inputs.action == 'apply'
         run: |
           PUBLIC_IP="${{ steps.tf-apply.outputs.ec2_public_ip }}"
           python scripts/validate.py --host "${PUBLIC_IP}" --port 80 --retries 10 --delay 10
 
       - name: Pipeline Summary
-        if: github.event.inputs.action != 'destroy'
+        if: github.event.inputs.action == 'apply'
         run: |
           PUBLIC_IP="${{ steps.tf-apply.outputs.ec2_public_ip }}"
           echo "### Deployment Successful! :rocket:" >> $GITHUB_STEP_SUMMARY
