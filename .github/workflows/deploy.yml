@@ -61,11 +61,18 @@ jobs:
       # APPLY PATH
       # ------------------------------------------------------------------------
       - name: Setup SSH Key for Ansible
-        if: github.event.inputs.action == 'apply' && secrets.SSH_PRIVATE_KEY != ''
+        if: github.event.inputs.action == 'apply'
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+          if [ -n "${SSH_KEY}" ]; then
+            mkdir -p ~/.ssh
+            echo "${SSH_KEY}" > ~/.ssh/id_rsa
+            chmod 600 ~/.ssh/id_rsa
+            echo "SSH private key configured."
+          else
+            echo "::warning::SSH_PRIVATE_KEY secret not found. Manual SSH key setup required."
+          fi
 
       - name: Terraform Apply
         if: github.event.inputs.action == 'apply'
@@ -78,8 +85,15 @@ jobs:
           echo "ec2_public_ip=${PUBLIC_IP}" >> $GITHUB_OUTPUT
 
       - name: Configure Server with Ansible
-        if: github.event.inputs.action == 'apply' && secrets.SSH_PRIVATE_KEY != ''
+        if: github.event.inputs.action == 'apply'
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
+          if [ -z "${SSH_KEY}" ]; then
+            echo "::warning::SSH_PRIVATE_KEY is empty. Skipping Ansible provisioning step."
+            exit 0
+          fi
+
           PUBLIC_IP="${{ steps.tf-apply.outputs.ec2_public_ip }}"
           echo "[*] Target Host IP: ${PUBLIC_IP}"
           
